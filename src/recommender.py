@@ -64,9 +64,9 @@ def load_songs(csv_path: str) -> List[Dict]:
             songs.append(song)
     return songs
 
-GENRE_WEIGHT = 2.0
+GENRE_WEIGHT = 1.0
 MOOD_WEIGHT = 1.5
-ENERGY_WEIGHT = 1.0
+ENERGY_WEIGHT = 2.0
 
 def score_song(user_prefs: Dict, song: Dict) -> Tuple[float, List[str]]:
     """Scores a song against user preferences and returns (score, reasons)."""
