@@ -11,7 +11,7 @@ Your goal is to:
 - Evaluate what your system gets right and wrong
 - Reflect on how this mirrors real world AI recommenders
 
-Replace this paragraph with your own summary of what your version does.
+Real-world recommenders largely lean on collaborative filtering, which is inferring what a user will like based on patterns across millions of other users with similar behavior layered with implicit signals like skips, replays, watch time, and session context rather than explicit ratings. Content-based filtering, which is matching a user's stated or inferred preferences directly against a song's own attributes plays a supporting role, and is mainly useful for cases where a new user or new song has no behavioral history yet. This simulation isolates the content-based half of that picture. With only 10 songs and no user population to analyze for behavioral patterns, collaborative filtering isn't feasible here. Instead, this version prioritizes a transparent scoring rule: it takes a small number of user preferences and directly measures how closely each song's own attributes match them, weighting a categorical identity signal above a more situational/subjective one, and using distance-based scoring for numeric traits like energy so "closer to what you asked for", not simply "higher" or "lower", wins.
 
 ---
 
@@ -23,11 +23,65 @@ Some prompts to answer:
 
 - What features does each `Song` use in your system
   - For example: genre, mood, energy, tempo
+  Each song has the identifying variables of id, title and artist with taste-related features including genre, mood, energy, valence, danceability, acousticness, and tempo/bpm. As of right now, the system takes into account genre, mood, energy, and acousticness as there isn't usually an explicit preference written for these and are typically dependent on the previous features.
 - What information does your `UserProfile` store
+  It just store the 4 major fields that a song recommender would typically ask. These include favorite genre, mood, preferred energy, and if they like acoustic. It's much more narrower as the user is telling the system what they want in general, not every attribute a song should have.
 - How does your `Recommender` compute a score for each song
+  Based on the csv and what was researched, the top features include genre, mood, energy, and acoustics with the top 2 being genre and mood. These are weighted by 2, 1.5, 1, 1 respectively and both genre and mood are just an exact match or not, energy uses a closeness formula (1 - abs(difference)) as 1 - energy or energy by itself wouldn't make sense, and acousticness is 1 or 0 based on the preference being above 0.5 or not.
 - How do you choose which songs to recommend
+  After the recommender produces a computed score for each song, another function will sort that list and return the top k numbers that match the users preference. To preface, scoring and ranking will be kept separate as scoring answers how good a specific song is for a user, while ranking answers with all the scores, which and how many do I show?
 
 You can include a simple diagram or bullet list if helpful.
+
+Song features used in scoring:
+- genre (categorical — e.g., pop, lofi, rock, ambient, jazz, synthwave, indie pop)
+- mood (categorical — e.g., happy, chill, intense, relaxed, moody, focused)
+- energy (continuous, 0–1)
+- acousticness (continuous, 0–1, thresholded at 0.5 for matching)
+
+Song fields present but not used in scoring: id, title, artist (identifiers), tempo_bpm, valence, danceability (captured in the data but no corresponding preference in UserProfile yet).
+
+UserProfile fields:
+- favorite_genre (str) — matched exactly against Song.genre
+- favorite_mood (str) — matched exactly against Song.mood
+- target_energy (float, 0–1) — compared to Song.energy via distance, not exact match
+- likes_acoustic (bool) — compared to Song.acousticness via a threshold
+
+---
+
+## Algorithm Recipe
+
+**Score** each song as the sum of:
+
+| Component | Rule | Weight |
+|---|---|---|
+| Genre match | `song.genre == user.favorite_genre` → full points, else 0 | 2.0 |
+| Mood match | `song.mood == user.favorite_mood` → full points, else 0 | 1.5 |
+| Energy closeness | `1 - abs(song.energy - user.target_energy)` | 1.0 |
+| Acousticness match | `(song.acousticness > 0.5) == user.likes_acoustic` → full points, else 0 | 1.0 |
+
+```python
+def score_song(user: UserProfile, song: Song) -> float:
+    score = 0.0
+    if song.genre == user.favorite_genre:
+        score += 2.0
+    if song.mood == user.favorite_mood:
+        score += 1.5
+    score += (1 - abs(song.energy - user.target_energy)) * 1.0
+    if (song.acousticness > 0.5) == user.likes_acoustic:
+        score += 1.0
+    return score
+```
+
+**Rank**: sort all songs by score descending, return the top `k`. Scoring and ranking are separate steps — scoring judges one song at a time; ranking decides which and how many to surface.
+
+**Example** — user wants `genre="lofi", mood="chill", target_energy=0.35, likes_acoustic=True`: *Library Rain* (lofi/chill/0.35 energy/0.86 acoustic) scores 2.0+1.5+1.0+1.0 = **5.5**, edging out *Midnight Coding* (lofi/chill/0.42/0.71) at **5.43**, while *Spacewalk Thoughts* (ambient/chill/0.28/0.92) only reaches **3.43** — the genre mismatch there costs more than its better acousticness fit gains.
+
+### Expected biases
+
+- **Over-prioritizes genre.** A perfect mood/energy match in an adjacent genre (e.g., "ambient" vs "lofi") can still lose to a same-genre song with weaker mood/energy fit, since genre is both the heaviest weight and strictly boolean (no partial credit for related genres).
+- **Boolean mood/acousticness hide near-misses.** "Chill" vs "relaxed" scores the same as "chill" vs "aggressive"; acousticness at 0.49 scores the same as 0.05 — both collapse a spectrum into a hard yes/no.
+- **Catalog imbalance.** With only 20 songs and uneven genre representation (three lofi tracks vs. one classical), some taste profiles get richer, more differentiated results than others independent of the algorithm itself.
 
 ---
 
@@ -71,12 +125,32 @@ You can add more tests in `tests/test_recommender.py`.
 Paste a sample of your recommender's output here as a text block so a reader can see what it produces:
 
 ```
-# e.g.:
-# User profile: genre=indie, mood=chill, energy=low
-# Recommendations:
-#   1. ...
-#   2. ...
-#   3. ...
+Loading songs from data/songs.csv...
+Loaded songs: 20
+
+User profile: genre=pop, mood=happy, energy=0.8
+
+Top recommendations:
+========================================
+1. Sunrise City by Neon Echo - Score: 4.48
+     - genre match (+2.0)
+     - mood match (+1.5)
+     - energy closeness 0.98 (+0.98)
+----------------------------------------
+2. Gym Hero by Max Pulse - Score: 2.87
+     - genre match (+2.0)
+     - energy closeness 0.87 (+0.87)
+----------------------------------------
+3. Rooftop Lights by Indigo Parade - Score: 2.46
+     - mood match (+1.5)
+     - energy closeness 0.96 (+0.96)
+----------------------------------------
+4. Concrete Bloom by Verse Fifty - Score: 1.00
+     - energy closeness 1.00 (+1.00)
+----------------------------------------
+5. Night Drive Loop by Neon Echo - Score: 0.95
+     - energy closeness 0.95 (+0.95)
+----------------------------------------
 ```
 
 **Screenshot or video** *(optional)*: <!-- Insert a screenshot or demo video link here -->
